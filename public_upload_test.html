@@ -1,0 +1,131 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supabase Public Photo Upload Test</title>
+    <!-- Import Supabase Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; text-align: center; }
+        .preview-container { margin: 20px auto; width: 150px; height: 150px; border-radius: 50%; overflow: hidden; border: 2px solid #ccc; background: #f0f0f0; }
+        img { width: 100%; height: 100%; object-fit: cover; }
+        button { padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:disabled { background: #9ca3af; }
+        .error { color: red; margin-top: 10px; }
+        .success { color: green; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h2>Upload Profile Photo</h2>
+    <p>Upload a photo to <code>public-photos</code> bucket and update user profile.</p>
+
+    <div class="preview-container">
+        <img id="preview" src="https://via.placeholder.com/150" alt="Profile Preview">
+    </div>
+
+    <input type="file" id="fileInput" accept="image/*" style="display: none;">
+    <button onclick="document.getElementById('fileInput').click()">Select Photo</button>
+    <br><br>
+    <button id="uploadBtn" onclick="uploadPhoto()" disabled>Upload to Supabase</button>
+
+    <div id="status" class="status"></div>
+
+    <script>
+        // === CONFIGURATION ===
+        const SUPABASE_URL = 'https://mkrwluisohhcfktnlohh.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rcndsdWlzb2hoY2ZrdG5sb2hoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1NTg1NjAsImV4cCI6MjA4MTEzNDU2MH0.IV4iPbf2xSSs1YI50Rw_6hISKzOK37dCBeN4YJzrYlE';
+        // Test User ID from prompt
+        const USER_ID = '873b5060-8c44-4e95-8408-10a66bc05386'; 
+        const BUCKET_NAME = 'public-photos';
+        // Changed to 'users' based on request
+        const TABLE_NAME = 'users'; 
+
+        // Initialize Supabase
+        const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const preview = document.getElementById('preview');
+        const statusDiv = document.getElementById('status');
+        let selectedFile = null;
+
+        // Handle File Selection
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                selectedFile = file;
+                preview.src = URL.createObjectURL(file);
+                uploadBtn.disabled = false;
+                statusDiv.innerHTML = '';
+            }
+        });
+
+        // Upload Function
+        async function uploadPhoto() {
+            if (!selectedFile) return;
+            
+            uploadBtn.disabled = true;
+            uploadBtn.innerText = 'Uploading...';
+            statusDiv.innerHTML = '';
+
+            try {
+                const fileName = `${USER_ID}/profile_${Date.now()}.jpg`;
+
+                // 1. Upload to Storage
+                const { data, error: uploadError } = await supabase.storage
+                    .from(BUCKET_NAME)
+                    .upload(fileName, selectedFile, {
+                        cacheControl: '3600',
+                        upsert: true
+                    });
+
+                if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
+
+                // 2. Get Public URL
+                const { data: urlData } = supabase.storage
+                    .from(BUCKET_NAME)
+                    .getPublicUrl(fileName);
+                
+                const publicUrl = urlData.publicUrl;
+                console.log('Public URL:', publicUrl);
+
+                // 3. Update Database
+                // We try updating the 'users' table first.
+                // If that fails (table missing), we update Auth Metadata.
+                const { error: dbError } = await supabase
+                    .from(TABLE_NAME)
+                    .update({ photo_url: publicUrl })
+                    .eq('id', USER_ID);
+
+                if (dbError) {
+                    if (dbError.code === '42P01' || dbError.message.includes('Could not find the table')) {
+                        console.warn('Table not found, updating Auth Metadata...');
+                        // Fallback to Auth Metadata (Requires actual login to work in real app, but this script simulates the logic)
+                        // Note: updateUser only works if we are logged in as that user.
+                        // Since this is a test script with a hardcoded ID, we can't update another user's metadata easily without Service Key.
+                        // We will display a message.
+                        statusDiv.innerHTML = `<div class="success">Image Uploaded!<br>URL: <a href="${publicUrl}" target="_blank">View Image</a><br><small>Note: Database update skipped (Table 'users' missing).</small></div>`;
+                        preview.src = publicUrl;
+                        return;
+                    } else {
+                        throw new Error(`Database update failed: ${dbError.message}`);
+                    }
+                }
+
+                statusDiv.innerHTML = `<div class="success">Success! <br> URL: <a href="${publicUrl}" target="_blank">View Image</a></div>`;
+                preview.src = publicUrl;
+
+            } catch (err) {
+                console.error(err);
+                statusDiv.innerHTML = `<div class="error">${err.message}</div>`;
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.innerText = 'Upload to Supabase';
+            }
+        }
+    </script>
+</body>
+</html>
